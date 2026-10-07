@@ -1,0 +1,42 @@
+{
+  "name": "h5-devtools-mcp",
+  "version": "0.1.0",
+  "description": "MCP server that lets coding agents debug H5 pages inside Android WebViews on real devices",
+  "type": "module",
+  "bin": {
+    "h5-devtools-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "test:e2e": "node test/e2e/run.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "mcp",
+    "webview",
+    "android",
+    "h5",
+    "cdp",
+    "devtools",
+    "claude-code"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "chrome-remote-interface": "^0.34.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/chrome-remote-interface": "^0.34.0",
+    "@types/node": "^22.0.0",
+    "devtools-protocol": "^0.0.1710668",
+    "typescript": "^7.0.2"
+  }
+}
