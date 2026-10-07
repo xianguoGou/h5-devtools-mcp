@@ -18,6 +18,14 @@ export interface ConsoleEntry {
 
 const MAX_TEXT = 1000;
 const BUFFER_SIZE = 1000;
+/** Caps the CDP round-trips spent fetching previews on attach; older replayed objects print as "Object". */
+const MAX_REPLAY_PREVIEWS = 200;
+const PREVIEW_GROUP = "h5-devtools-preview";
+
+type PendingEntry = { entry: Omit<ConsoleEntry, "seq">; args?: Protocol.Runtime.RemoteObject[] };
+
+const needsPreview = (o: Protocol.Runtime.RemoteObject) =>
+  !o.preview && !!o.objectId && o.type === "object" && o.subtype !== "error";
 
 function truncate(s: string, max = MAX_TEXT): string {
   return s.length > max ? `${s.slice(0, max)}… [+${s.length - max} chars]` : s;
@@ -40,6 +48,8 @@ function formatArg(o: Protocol.Runtime.RemoteObject): string {
   if (o.preview && o.type === "object" && o.subtype !== "error") return formatPreview(o.preview);
   return o.description ?? o.type;
 }
+
+const formatArgs = (args: Protocol.Runtime.RemoteObject[]) => truncate(args.map(formatArg).join(" "));
 
 function formatFrame(frame?: Protocol.Runtime.CallFrame): string | undefined {
   if (!frame?.url) return undefined;
@@ -85,36 +95,96 @@ export class Session {
         "This page already has a debugger attached (usually chrome://inspect DevTools). Close it and call attach again.",
       );
     }
-    // local: true — use the bundled protocol descriptor; WebViews may not serve /json/protocol.
-    const client = await CDP({ target: target.wsUrl, local: true });
+    let client: CDP.Client;
+    try {
+      // local: true — use the bundled protocol descriptor; WebViews may not serve /json/protocol.
+      client = await CDP({ target: target.wsUrl, local: true });
+    } catch (e) {
+      throw new Error(
+        `Could not connect to the page (${e instanceof Error ? e.message : String(e)}). It may have closed; call list_targets and attach again.`,
+        { cause: e },
+      );
+    }
     const session = new Session(target, client);
     session.wire();
-    await client.Runtime.enable();
     try {
-      await client.Log.enable();
-    } catch {
-      // Log domain is optional; console + exceptions still work without it.
+      await client.Runtime.enable();
+      try {
+        await client.Log.enable();
+      } catch {
+        // Log domain is optional; console + exceptions still work without it.
+      }
+      await session.flushReplay();
+    } catch (e) {
+      // Release the socket, or single-client WebViews stay locked as "debugger in use".
+      await client.close().catch(() => {});
+      throw e;
     }
     return session;
+  }
+
+  /**
+   * Runtime.enable and Log.enable each replay their own history, so the two streams arrive
+   * out of order. Hold replayed entries here and assign seqs only after sorting by time.
+   */
+  private replay?: PendingEntry[] = [];
+
+  private add(entry: Omit<ConsoleEntry, "seq">, args?: Protocol.Runtime.RemoteObject[]) {
+    if (this.replay) this.replay.push({ entry, args });
+    else this.console.push(entry);
+  }
+
+  /** Replayed console args carry no preview (only live ones do), so fetch it for the most recent ones. */
+  private async flushReplay() {
+    const pending = this.replay ?? [];
+    const toPreview = pending.filter((p) => p.args?.some(needsPreview)).slice(-MAX_REPLAY_PREVIEWS);
+    await Promise.all(
+      toPreview.map(async (p) => {
+        p.entry.text = formatArgs(await Promise.all(p.args!.map((a) => this.withPreview(a))));
+      }),
+    );
+    if (toPreview.length) await this.client.Runtime.releaseObjectGroup({ objectGroup: PREVIEW_GROUP }).catch(() => {});
+    // Live events that arrived during the awaits above were appended to `pending` too.
+    this.replay = undefined;
+    pending.sort((a, b) => a.entry.time - b.entry.time);
+    for (const p of pending) this.console.push(p.entry);
+  }
+
+  private async withPreview(o: Protocol.Runtime.RemoteObject): Promise<Protocol.Runtime.RemoteObject> {
+    if (!needsPreview(o)) return o;
+    try {
+      const { result } = await this.client.Runtime.callFunctionOn({
+        objectId: o.objectId,
+        functionDeclaration: "function () { return this; }",
+        generatePreview: true,
+        objectGroup: PREVIEW_GROUP,
+      });
+      return result;
+    } catch {
+      return o;
+    }
   }
 
   private wire() {
     const { client } = this;
 
     client.Runtime.consoleAPICalled((e) => {
-      this.console.push({
-        time: e.timestamp || Date.now(),
-        level: normalizeConsoleType(e.type),
-        source: "console",
-        text: truncate(e.args.map(formatArg).join(" ")),
-        location: formatFrame(e.stackTrace?.callFrames[0]),
-      });
+      this.add(
+        {
+          time: e.timestamp || Date.now(),
+          level: normalizeConsoleType(e.type),
+          source: "console",
+          text: formatArgs(e.args),
+          location: formatFrame(e.stackTrace?.callFrames[0]),
+        },
+        e.args,
+      );
     });
 
     client.Runtime.exceptionThrown((e) => {
       const d = e.exceptionDetails;
       const text = d.exception?.description ?? d.text;
-      this.console.push({
+      this.add({
         time: e.timestamp || Date.now(),
         level: "error",
         source: "exception",
@@ -126,7 +196,7 @@ export class Session {
     });
 
     client.Log.entryAdded(({ entry }) => {
-      this.console.push({
+      this.add({
         time: entry.timestamp || Date.now(),
         level: normalizeLogLevel(entry.level),
         source: "browser",

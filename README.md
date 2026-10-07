@@ -26,6 +26,8 @@ WebView.setWebContentsDebuggingEnabled(true);
 ## Setup
 
 ```bash
+git clone https://github.com/xianguoGou/h5-devtools-mcp.git
+cd h5-devtools-mcp
 npm install && npm run build
 
 # Claude Code
@@ -63,6 +65,13 @@ next since_seq: 57
 - **"no debuggable WebView found"** — the app hasn't enabled WebView debugging, or no WebView is alive yet. Open the H5 page first.
 - **"debugger in use"** — only one debugger can attach to a page. Close the `chrome://inspect` DevTools window.
 - **"unauthorized"** — accept the USB debugging prompt on the device.
+
+## Known limitations
+
+- **Debugger-in-use detection is best-effort.** It relies on `/json/list` omitting `webSocketDebuggerUrl`. Recent Chromium accepts several CDP clients per page, so attach may succeed alongside an open DevTools window; older WebViews may still refuse.
+- **`list_targets` can take ~3s per unresponsive app.** Sockets are queried one by one with a 3s timeout, and Android freezes background apps, so their WebView sockets stop answering. `attach` only re-checks the target's own socket and stays fast.
+- **No exclude filter yet.** Pages with analytics/ad tags can fill the buffer with failed-request entries carrying very long URLs; narrow with `levels` / `keyword` for now.
+- **The e2e script waits a fixed 1.5s for Chromium to start**, so a cold start can fail with `fetch failed`; re-run it. Check no headless Chromium is left holding port 9333 between runs.
 
 ## Development
 
