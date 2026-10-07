@@ -1,6 +1,12 @@
 # h5-devtools-mcp
 
-An MCP server that lets coding agents (Claude Code, Codex, Cursor…) debug **H5 pages running inside Android WebViews on real devices** — read console output and uncaught exceptions without opening `chrome://inspect`.
+[![npm version](https://img.shields.io/npm/v/h5-devtools-mcp.svg)](https://www.npmjs.com/package/h5-devtools-mcp)
+[![npm downloads](https://img.shields.io/npm/dm/h5-devtools-mcp.svg)](https://www.npmjs.com/package/h5-devtools-mcp)
+[![license](https://img.shields.io/npm/l/h5-devtools-mcp.svg)](LICENSE)
+
+English | [简体中文](README.zh-CN.md)
+
+An MCP server that lets coding agents (Claude Code, Codex, Cursor…) debug **H5 pages running inside Android WebViews on real devices** — read console output and uncaught exceptions, and run JavaScript in the page, without opening `chrome://inspect`.
 
 > Status: v0.1, early. Android only.
 

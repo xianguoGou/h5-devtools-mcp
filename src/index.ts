@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // NOTE: stdout carries the MCP protocol. Never use console.log here — use console.error for diagnostics.
+import { createRequire } from "node:module";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -7,7 +8,8 @@ import { CONSOLE_LEVELS, SessionManager, type ConsoleEntry } from "./session.js"
 import { findTarget, formatTargets, listTargets } from "./targets.js";
 
 const sessions = new SessionManager();
-const server = new McpServer({ name: "h5-devtools-mcp", version: "0.1.0" });
+const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
+const server = new McpServer({ name: "h5-devtools-mcp", version });
 
 const ok = (text: string) => ({ content: [{ type: "text" as const, text }] });
 const fail = (e: unknown) => ({
