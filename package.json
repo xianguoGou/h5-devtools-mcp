@@ -21,7 +21,8 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "start": "node dist/index.js",
-    "test:e2e": "node test/e2e/run.mjs"
+    "test:e2e": "node test/e2e/run.mjs",
+    "prepack": "npm run build"
   },
   "engines": {
     "node": ">=18"
