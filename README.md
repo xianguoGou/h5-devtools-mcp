@@ -26,11 +26,18 @@ WebView.setWebContentsDebuggingEnabled(true);
 ## Setup
 
 ```bash
+# Claude Code
+claude mcp add h5-devtools -- npx -y h5-devtools-mcp
+```
+
+Other MCP clients (Cursor, Codex…) take the same command: `npx -y h5-devtools-mcp`.
+
+### From source
+
+```bash
 git clone https://github.com/xianguoGou/h5-devtools-mcp.git
 cd h5-devtools-mcp
 npm install && npm run build
-
-# Claude Code
 claude mcp add h5-devtools -- node /absolute/path/to/h5-devtools-mcp/dist/index.js
 ```
 
