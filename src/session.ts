@@ -21,6 +21,9 @@ const BUFFER_SIZE = 1000;
 /** Caps the CDP round-trips spent fetching previews on attach; older replayed objects print as "Object". */
 const MAX_REPLAY_PREVIEWS = 200;
 const PREVIEW_GROUP = "h5-devtools-preview";
+const MAX_EVAL_TEXT = 4000;
+const EVAL_TIMEOUT_MS = 10_000;
+const EVAL_GROUP = "h5-devtools-eval";
 
 type PendingEntry = { entry: Omit<ConsoleEntry, "seq">; args?: Protocol.Runtime.RemoteObject[] };
 
@@ -32,6 +35,13 @@ function truncate(s: string, max = MAX_TEXT): string {
 }
 
 function formatPreview(p: Protocol.Runtime.ObjectPreview): string {
+  // Map/Set contents live in `entries`, not `properties`.
+  if (p.entries) {
+    const text = (v: Protocol.Runtime.ObjectPreview) => (v.type === "string" ? JSON.stringify(v.description) : v.description);
+    const items = p.entries.map((e) => (e.key ? `${text(e.key)} => ${text(e.value)}` : text(e.value)));
+    if (p.overflow) items.push("…");
+    return `${p.description ?? ""} {${items.join(", ")}}`;
+  }
   const isArray = p.subtype === "array";
   const props = p.properties.map((prop) => {
     const v = prop.type === "string" ? JSON.stringify(prop.value) : (prop.value ?? prop.type);
@@ -209,6 +219,67 @@ export class Session {
       this.closed = true;
       this.closeReason ??= "connection lost (page closed, app killed, or device disconnected)";
     });
+  }
+
+  private evalCount = 0;
+
+  /** Evaluate an expression in the page and return a compact text rendering of the result. */
+  async evaluate(expression: string): Promise<{ text: string; isError: boolean }> {
+    if (this.closed) throw new Error(`Session closed: ${this.closeReason}. Re-run list_targets and attach.`);
+    // One group per call, so a finishing call can't release objects a concurrent call still uses.
+    const objectGroup = `${EVAL_GROUP}-${++this.evalCount}`;
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`Evaluation did not finish within ${EVAL_TIMEOUT_MS / 1000}s (it may still be running in the page).`)),
+        EVAL_TIMEOUT_MS,
+      );
+    });
+    try {
+      return await Promise.race([this.evaluateInGroup(expression, objectGroup), timeout]);
+    } finally {
+      clearTimeout(timer);
+      await this.client.Runtime.releaseObjectGroup({ objectGroup }).catch(() => {});
+    }
+  }
+
+  private async evaluateInGroup(expression: string, objectGroup: string): Promise<{ text: string; isError: boolean }> {
+    const { result, exceptionDetails } = await this.client.Runtime.evaluate({
+      expression,
+      awaitPromise: true,
+      generatePreview: true,
+      userGesture: true,
+      objectGroup,
+    });
+    if (exceptionDetails) {
+      // Thrown primitives (throw "x") carry a value and no description.
+      const d = exceptionDetails;
+      return { text: truncate(d.exception ? formatArg(d.exception) : d.text, MAX_EVAL_TEXT), isError: true };
+    }
+    return { text: await this.renderValue(result), isError: false };
+  }
+
+  /**
+   * returnByValue turns DOM nodes, Maps and Errors into {} and throws on window, so only plain
+   * objects/arrays are JSON-serialized (in the page); everything else uses its description or preview.
+   */
+  private async renderValue(o: Protocol.Runtime.RemoteObject): Promise<string> {
+    if (o.type === "undefined") return "undefined";
+    if (o.subtype === "node") return o.description ?? "node";
+    if (o.objectId && o.type === "object" && (!o.subtype || o.subtype === "array")) {
+      // Truncate in the page so a huge array isn't shipped over USB only to be cut here.
+      const { result } = await this.client.Runtime.callFunctionOn({
+        objectId: o.objectId,
+        functionDeclaration: `function () {
+          const s = JSON.stringify(this, null, 2);
+          return typeof s === "string" && s.length > ${MAX_EVAL_TEXT} ? s.slice(0, ${MAX_EVAL_TEXT}) + "… [+" + (s.length - ${MAX_EVAL_TEXT}) + " chars]" : s;
+        }`,
+        returnByValue: true,
+      });
+      // Cyclic objects (e.g. window) make JSON.stringify throw; fall back to the preview.
+      if (typeof result.value === "string") return result.value;
+    }
+    return truncate(formatArg(o), MAX_EVAL_TEXT);
   }
 
   async close(reason = "detached") {

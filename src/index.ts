@@ -85,22 +85,30 @@ server.registerTool(
       target_id: z.string().optional().describe("Defaults to the most recently attached page"),
       levels: z.array(z.enum(CONSOLE_LEVELS)).optional().describe("Only these levels, e.g. [\"warn\", \"error\"]"),
       keyword: z.string().optional().describe("Case-insensitive substring match on message text and location"),
+      exclude_keywords: z
+        .array(z.string().min(1))
+        .optional()
+        .describe("Drop entries whose text or location contains any of these (case-insensitive), e.g. [\"google-analytics\", \"doubleclick\"]"),
       since_seq: z.number().int().optional().describe("Only entries with seq greater than this"),
       limit: z.number().int().min(1).max(500).optional().describe("Max entries to return (default 50)"),
     },
     annotations: { readOnlyHint: true },
   },
-  async ({ target_id, levels, keyword, since_seq, limit = 50 }) => {
+  async ({ target_id, levels, keyword, exclude_keywords, since_seq, limit = 50 }) => {
     try {
       const session = sessions.get(target_id);
       const kw = keyword?.toLowerCase();
+      const excludes = exclude_keywords?.map((k) => k.toLowerCase()) ?? [];
       const all = session.console.all();
-      const matched = all.filter(
-        (e) =>
+      const matched = all.filter((e) => {
+        const haystack = `${e.text}\n${e.location ?? ""}`.toLowerCase();
+        return (
           (since_seq === undefined || e.seq > since_seq) &&
           (!levels || levels.includes(e.level)) &&
-          (!kw || e.text.toLowerCase().includes(kw) || e.location?.toLowerCase().includes(kw)),
-      );
+          (!kw || haystack.includes(kw)) &&
+          !excludes.some((x) => haystack.includes(x))
+        );
+      });
       const shown = matched.slice(-limit);
 
       const header = [
@@ -114,6 +122,31 @@ server.registerTool(
       const body = shown.length ? shown.map(formatEntry) : ["(no entries)"];
       const footer = `next since_seq: ${session.console.lastSeq}`;
       return ok([...header, "", ...body, "", footer].join("\n"));
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+server.registerTool(
+  "evaluate_js",
+  {
+    title: "Evaluate JavaScript in a page",
+    description:
+      "Run a JavaScript expression in an attached page and return its result. Plain objects/arrays come back as JSON " +
+      "(so nested Map/Set/DOM values show as {}); other values (DOM nodes, Map, Set, Error, window) as a short description. " +
+      "Promises are awaited. For multiple statements or await, wrap them: (async () => { ... })(). " +
+      "Runs with the page's full privileges, so it can read cookies/storage and change page state.",
+    inputSchema: {
+      expression: z.string().min(1).describe("JavaScript expression to evaluate"),
+      target_id: z.string().optional().describe("Defaults to the most recently attached page"),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+  },
+  async ({ expression, target_id }) => {
+    try {
+      const { text, isError } = await sessions.get(target_id).evaluate(expression);
+      return isError ? fail(new Error(`Uncaught ${text}`)) : ok(text);
     } catch (e) {
       return fail(e);
     }

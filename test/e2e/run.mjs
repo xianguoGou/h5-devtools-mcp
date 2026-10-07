@@ -17,7 +17,16 @@ const chrome = spawn(chromeBin, [
   `file://${path.join(dir, "page.html")}`,
 ], { stdio: "ignore" });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-await sleep(1500);
+for (let i = 0; ; i++) {
+  try {
+    if ((await fetch(`http://127.0.0.1:${PORT}/json/version`)).ok) break;
+  } catch {}
+  if (i >= 50) {
+    chrome.kill();
+    throw new Error(`Chrome did not open port ${PORT} within 10s`);
+  }
+  await sleep(200);
+}
 
 const transport = new StdioClientTransport({
   command: "node",
@@ -43,6 +52,15 @@ try {
   const next = Number(out.match(/next since_seq: (\d+)/)[1]);
   await sleep(500);
   await call("get_console", { since_seq: next });
+  await call("get_console", { exclude_keywords: ["tick"], limit: 5 });
+  await call("evaluate_js", { expression: "document.title" });
+  await call("evaluate_js", { expression: "Promise.resolve({ n, ok: n > 0 })" });
+  await call("evaluate_js", { expression: "document.body" });
+  await call("evaluate_js", { expression: "[new Map([[1, 2]]), new Error(\"boom\").message]" });
+  await call("evaluate_js", { expression: "window" });
+  await call("evaluate_js", { expression: "missingVar.x" });
+  await call("evaluate_js", { expression: "Promise.reject(\"rejected string\")" });
+  await call("evaluate_js", { expression: "Array(5000).fill(1)" });
   await call("detach");
 } finally {
   await client.close();
