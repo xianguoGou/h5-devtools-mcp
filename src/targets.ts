@@ -121,13 +121,23 @@ export async function listTargets(): Promise<{ targets: Target[]; warnings: stri
   return { targets, warnings };
 }
 
-/** Look up a target from the last listing, refreshing once if it's not there. */
+/**
+ * Look up a target, re-checking that its page still exists so a page closed since the last
+ * list_targets is reported as gone. Only the target's own socket is queried: a full relist
+ * waits on every other socket, and frozen background apps time out.
+ */
 export async function findTarget(id: string): Promise<Target> {
-  let target = cache.get(id);
-  if (!target) {
-    await listTargets();
-    target = cache.get(id);
+  const cached = cache.get(id);
+  if (cached) {
+    try {
+      const page = (await fetchPages(cached.port)).find((p) => p.id === cached.pageId);
+      if (page) return { ...cached, title: page.title, url: page.url, debuggerInUse: !page.webSocketDebuggerUrl };
+    } catch {
+      // Forward or socket gone (app restarted); fall back to a full relist.
+    }
   }
+  await listTargets();
+  const target = cache.get(id);
   if (!target) {
     throw new Error(`Target "${id}" not found. Call list_targets to see current pages; ids change when the app restarts.`);
   }
