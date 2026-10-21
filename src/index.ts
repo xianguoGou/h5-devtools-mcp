@@ -38,7 +38,7 @@ server.registerTool(
       "List debuggable H5 pages running inside Android WebViews (and Chrome) on connected devices. " +
       "Returns a target id for each page to pass to attach.",
     inputSchema: {},
-    annotations: { readOnlyHint: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   async () => {
     try {
@@ -60,6 +60,7 @@ server.registerTool(
     inputSchema: {
       target_id: z.string().describe("Target id from list_targets"),
     },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   async ({ target_id }) => {
     try {
@@ -94,7 +95,7 @@ server.registerTool(
       since_seq: z.number().int().optional().describe("Only entries with seq greater than this"),
       limit: z.number().int().min(1).max(500).optional().describe("Max entries to return (default 50)"),
     },
-    annotations: { readOnlyHint: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   async ({ target_id, levels, keyword, exclude_keywords, since_seq, limit = 50 }) => {
     try {
@@ -143,7 +144,7 @@ server.registerTool(
       expression: z.string().min(1).describe("JavaScript expression to evaluate"),
       target_id: z.string().optional().describe("Defaults to the most recently attached page"),
     },
-    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   },
   async ({ expression, target_id }) => {
     try {
@@ -163,6 +164,7 @@ server.registerTool(
     inputSchema: {
       target_id: z.string().optional().describe("Defaults to the most recently attached page"),
     },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   },
   async ({ target_id }) => {
     try {
