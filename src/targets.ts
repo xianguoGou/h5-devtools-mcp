@@ -72,12 +72,12 @@ export async function listTargets(): Promise<{ targets: Target[]; warnings: stri
   const warnings: string[] = [];
 
   let androidError: unknown;
-  try {
-    await listAndroidTargets(targets, warnings);
-  } catch (e) {
-    androidError = e;
-  }
-  const ios = await listIosTargets();
+  const [, ios] = await Promise.all([
+    listAndroidTargets(targets, warnings).catch((e) => {
+      androidError = e;
+    }),
+    listIosTargets(),
+  ]);
   targets.push(...ios.targets);
   warnings.push(...ios.warnings);
   // Without adb, only fail when there is nothing else to show.

@@ -22,7 +22,7 @@
 编程 Agent ──MCP (stdio)──▶ h5-devtools-mcp ──▶ ios_webkit_debug_proxy ──WebKit Inspector Protocol──▶ WKWebView 页面
 ```
 
-iOS 这边，本服务会自己启动 [ios_webkit_debug_proxy](https://github.com/google/ios-webkit-debug-proxy)（模拟器一个、USB 真机一个），退出时一起关掉。两个平台的页面出现在同一个 `list_targets` 里，其他工具的用法完全一样。
+iOS 这边，本服务会自己启动 [ios_webkit_debug_proxy](https://github.com/google/ios-webkit-debug-proxy)（模拟器一个、USB 真机一个），服务正常退出时一起关掉（服务被 SIGKILL 强杀时可能残留）。两个平台的页面出现在同一个 `list_targets` 里，用的是同一套工具，差异见「已知限制」。
 
 ## 环境要求
 
@@ -110,6 +110,7 @@ next since_seq: 57
 - **遇到没响应的 App，`list_targets` 每个要多等约 3 秒**：socket 是逐个查询的，超时 3 秒；Android 会冻结后台 App，它们的 WebView socket 就不再响应。`attach` 只重新检查目标页自己的 socket，速度不受影响。
 - **`evaluate_js` 拥有页面的全部权限**：能读取 cookie、storage 和 token，也能改变页面状态。请保留 Agent 调用工具前的确认提示。
 - **iOS 拿不到 attach 之前的日志**：WebKit 只在有调试器开着 console 时才记录日志，所以要先 attach 再复现问题。Android 会在 attach 时补发最近的日志。
+- **iOS 第一次列出页面最多可能要等 15 秒**：新启动的代理通常 1 秒内就能列出页面，但如果刚有别的调试客户端断开（比如上一个服务进程、Safari 网页检查器），要等 10 秒左右。Android 和 iOS 是一起列出的，所以这一次 Android 的结果也要跟着等。之后的调用都很快。
 - **iOS 真机还没验证过**：代理本身支持真机，但本项目目前只在 iOS 模拟器上验证过。
 - **e2e 测试要求 9333 端口空闲**：如果上次运行留下了 headless Chromium，测试会连到它上面，先把它关掉。
 

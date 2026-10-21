@@ -22,7 +22,7 @@ Every debuggable WebView exposes a Chrome DevTools Protocol endpoint on an abstr
 Coding agent ──MCP (stdio)──▶ h5-devtools-mcp ──▶ ios_webkit_debug_proxy ──WebKit Inspector Protocol──▶ WKWebView page
 ```
 
-On iOS the server starts [ios_webkit_debug_proxy](https://github.com/google/ios-webkit-debug-proxy) itself (one for the booted Simulator, one for USB devices) and stops it on exit. Both platforms show up in the same `list_targets`; the other tools work the same way.
+On iOS the server starts [ios_webkit_debug_proxy](https://github.com/google/ios-webkit-debug-proxy) itself (one for the booted Simulator, one for USB devices) and stops it when the server exits (a SIGKILLed server can leave it running). Both platforms show up in the same `list_targets` and use the same tools; see Known limitations for the differences.
 
 ## Requirements
 
@@ -110,6 +110,7 @@ next since_seq: 57
 - **`list_targets` can take ~3s per unresponsive app.** Sockets are queried one by one with a 3s timeout, and Android freezes background apps, so their WebView sockets stop answering. `attach` only re-checks the target's own socket and stays fast.
 - **`evaluate_js` runs with the page's full privileges** — it can read cookies, storage and tokens, and change page state. Keep it behind your agent's tool-permission prompt.
 - **iOS keeps no console history from before you attach.** WebKit only records messages while an inspector has the console enabled, so attach first and then reproduce. Android replays recent messages on attach.
+- **The first iOS listing can take up to 15s.** A newly started proxy usually lists pages within a second, but ~10s when another inspector client disconnected shortly before (a previous server, Safari Web Inspector). Android results wait for it too, since both are listed together. Later calls are fast.
 - **iOS on real devices is untested.** The proxy supports them, but this project has only been verified on the iOS Simulator.
 - **The e2e script expects port 9333 to be free.** If a previous run left a headless Chromium behind, it attaches to that one; kill it first.
 

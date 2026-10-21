@@ -43,8 +43,24 @@ const call = async (name, args = {}) => {
 const expect = (cond, what) => {
   if (!cond) throw new Error(`FAILED: ${what}`);
 };
+/** ios_webkit_debug_proxy processes started by the server under test. */
+const proxyPids = () =>
+  execFileSync("ps", ["-axo", "pid=,ppid=,comm="])
+    .toString()
+    .split("\n")
+    .map((l) => l.trim().split(/\s+/))
+    .filter(([, ppid, comm]) => Number(ppid) === transport.pid && comm?.endsWith("ios_webkit_debug_proxy"))
+    .map(([pid]) => Number(pid));
 
+let spawned = [];
 try {
+  // Concurrent first calls must share one proxy start per kind (simulator + usb), not leak extras.
+  await Promise.all([call("list_targets"), call("list_targets")]);
+  expect(proxyPids().length <= 2, `at most 2 proxies after concurrent list_targets (got ${proxyPids().length})`);
+
+  // A proxy killed by a signal must be noticed and restarted.
+  for (const pid of proxyPids()) process.kill(pid, "SIGKILL");
+  await sleep(300);
   const { text: list } = await call("list_targets");
   const block = list.split("\n- ").find((b) => b.includes(first));
   const id = block?.match(/id: (ios\/\S+)/)?.[1];
@@ -73,6 +89,8 @@ try {
   expect((await call("evaluate_js", { expression: "new Map([[1, 2]])" })).text.startsWith("Map"), "evaluate describes a Map");
   const thrown = await call("evaluate_js", { expression: "missingVar.x" });
   expect(thrown.isError && thrown.text.includes("missingVar"), "evaluate reports thrown errors");
+  const slow = await call("evaluate_js", { expression: "new Promise((r) => setTimeout(() => r('slow done'), 6000))" });
+  expect(!slow.isError && slow.text === "slow done", "a 6s promise is awaited (eval limit is 10s)");
   const rejected = await call("evaluate_js", { expression: "Promise.reject(new Error('nope'))" });
   expect(rejected.isError && rejected.text.includes("nope"), "evaluate reports rejected promises");
 
@@ -86,8 +104,21 @@ try {
   expect(after.includes('[log] boot {symbol: "AAPL", qty: 10} [1, 2, 3]'), "console keeps flowing (with previews) after the target swap");
 
   await call("detach");
-  console.log("\nPASS");
+  spawned = proxyPids();
+  expect(spawned.length >= 1, "proxy is running before shutdown");
 } finally {
   await client.close();
   server.close();
 }
+// Closing the client closes the server's stdin; the server must exit and take its proxies with it.
+await sleep(1000);
+const leftover = spawned.filter((pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+});
+expect(leftover.length === 0, `proxies stopped after the client disconnects (left: ${leftover})`);
+console.log("\nPASS");

@@ -3,6 +3,7 @@ import { RingBuffer } from "./ringBuffer.js";
 import { currentPageInfo, type Target } from "./targets.js";
 import {
   BUFFER_SIZE,
+  EVAL_TIMEOUT_MS,
   MAX_EVAL_TEXT,
   truncate,
   withEvalTimeout,
@@ -50,6 +51,7 @@ interface ConsoleMessage {
   column?: number;
   timestamp?: number;
   parameters?: RemoteObject[];
+  repeatCount?: number;
   // Newer WebKit wraps frames in an object; older sends the array directly.
   stackTrace?: { callFrames?: CallFrame[] } | CallFrame[];
 }
@@ -82,7 +84,8 @@ function formatArg(o: RemoteObject): string {
 const needsPreview = (o: RemoteObject) =>
   !o.preview && !!o.objectId && o.type === "object" && o.subtype !== "error" && o.subtype !== "null";
 
-type PendingEntry = { entry: Omit<ConsoleEntry, "seq">; params?: RemoteObject[] };
+/** `repeat` > 1 when WebKit folded identical consecutive messages into one. */
+type PendingEntry = { entry: Omit<ConsoleEntry, "seq">; params?: RemoteObject[]; repeat: number };
 
 function normalizeLevel(level: string): ConsoleLevel {
   if (level === "error") return "error";
@@ -142,12 +145,14 @@ export class WebKitSession implements PageSession {
       );
     }
     const session = new WebKitSession(target, ws);
+    let timer: NodeJS.Timeout | undefined;
     const announced = new Promise<void>((resolve) => {
       session.onTarget = resolve;
-      setTimeout(resolve, TARGET_WAIT_MS);
+      timer = setTimeout(resolve, TARGET_WAIT_MS);
     });
     session.wire();
     await announced;
+    clearTimeout(timer);
     try {
       await session.enable();
     } catch (e) {
@@ -163,18 +168,19 @@ export class WebKitSession implements PageSession {
   private replay?: PendingEntry[];
 
   private async enable() {
-    this.replay = [];
+    // Each enable owns its buffer: a second navigation can start a new enable before this one flushes.
+    const buffer: PendingEntry[] = [];
+    this.replay = buffer;
     try {
       // Console.enable replays only what was logged while some inspector had Console enabled;
       // unlike Chromium, messages from before the first attach are gone.
       await Promise.all([this.send("Console.enable"), this.send("Runtime.enable")]);
     } finally {
-      await this.flushReplay();
+      await this.flushReplay(buffer);
     }
   }
 
-  private async flushReplay() {
-    const pending = this.replay ?? [];
+  private async flushReplay(pending: PendingEntry[]) {
     const toPreview = pending.filter((p) => p.params?.some(needsPreview)).slice(-MAX_REPLAY_PREVIEWS);
     await Promise.all(
       toPreview.map(async (p) => {
@@ -189,16 +195,16 @@ export class WebKitSession implements PageSession {
       }),
     );
     // Live messages that arrived during the awaits above were appended to `pending` too.
-    this.replay = undefined;
-    for (const p of pending) this.console.push(p.entry);
+    if (this.replay === pending) this.replay = undefined;
+    for (const p of pending) for (let i = 0; i < p.repeat; i++) this.console.push(p.entry);
   }
 
-  private add(entry: Omit<ConsoleEntry, "seq">, params?: RemoteObject[]) {
-    if (this.replay) this.replay.push({ entry, params });
-    else this.console.push(entry);
+  private add(entry: Omit<ConsoleEntry, "seq">, params?: RemoteObject[], repeat = 1) {
+    if (this.replay) this.replay.push({ entry, params, repeat });
+    else for (let i = 0; i < repeat; i++) this.console.push(entry);
   }
 
-  private send(method: string, params: Record<string, unknown> = {}): Promise<any> {
+  private send(method: string, params: Record<string, unknown> = {}, timeoutMs = COMMAND_TIMEOUT_MS): Promise<any> {
     if (this.closed) return Promise.reject(new Error(`Session closed: ${this.closeReason}. Re-run list_targets and attach.`));
     const id = ++this.nextId;
     const inner = { id, method, params };
@@ -206,7 +212,7 @@ export class WebKitSession implements PageSession {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`${method} timed out`));
-      }, COMMAND_TIMEOUT_MS);
+      }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       if (this.targetId) {
         const outerId = ++this.nextId;
@@ -263,6 +269,8 @@ export class WebKitSession implements PageSession {
         case "Target.didCommitProvisionalTarget":
           // Cross-origin navigation swaps the page into a new process with a new target.
           if (msg.params.oldTargetId === this.targetId) {
+            // Commands still waiting on the old process will never be answered.
+            this.rejectPending("the page navigated to another origin; run the command again");
             this.targetId = msg.params.newTargetId;
             this.enable().catch(() => {});
           }
@@ -271,15 +279,15 @@ export class WebKitSession implements PageSession {
           if (msg.params.targetId === this.targetId) this.markClosed("page closed");
           break;
         case "Target.dispatchMessageFromTarget": {
-          if (msg.params.targetId !== this.targetId) break;
           let inner: any;
           try {
             inner = JSON.parse(msg.params.message);
           } catch {
             break;
           }
+          // Command ids are unique per session, so answers count whichever target sent them.
           if (inner.id !== undefined) this.settle(inner);
-          else this.onEvent(inner.method, inner.params);
+          else if (msg.params.targetId === this.targetId) this.onEvent(inner.method, inner.params);
           break;
         }
         default:
@@ -293,13 +301,26 @@ export class WebKitSession implements PageSession {
   private onEvent(method: string, params: any) {
     if (method === "Console.messageAdded") this.addMessage(params.message);
     else if (method === "Console.messageRepeatCountUpdated") {
-      // WebKit folds identical consecutive messages; record each repeat like Chromium does.
-      const last = this.replay ? this.replay.at(-1)?.entry : this.console.all().at(-1);
-      if (last) this.add({ ...last, time: (params.timestamp ?? Date.now() / 1000) * 1000 });
+      // WebKit folds identical consecutive messages and reports the running total; record each repeat
+      // like Chromium does.
+      const count: number = params.count ?? this.lastRepeat + 1;
+      const pending = this.replay?.at(-1);
+      if (pending) pending.repeat = Math.max(pending.repeat, count);
+      else {
+        const last = this.console.all().at(-1);
+        for (let i = this.lastRepeat; i < count && last; i++) {
+          this.console.push({ ...last, time: (params.timestamp ?? Date.now() / 1000) * 1000 });
+        }
+      }
+      this.lastRepeat = count;
     }
   }
 
+  /** Running total WebKit reported for the most recent message (1 = shown once). */
+  private lastRepeat = 1;
+
   private addMessage(m: ConsoleMessage) {
+    this.lastRepeat = Math.max(1, m.repeatCount ?? 1);
     const level = normalizeLevel(m.level);
     const isConsole = m.source === "console-api";
     const source = isConsole ? "console" : m.source === "javascript" && level === "error" ? "exception" : "browser";
@@ -313,18 +334,25 @@ export class WebKitSession implements PageSession {
         location: formatLocation(m),
       },
       isConsole ? m.parameters : undefined,
+      Math.max(1, m.repeatCount ?? 1),
     );
+  }
+
+  private rejectPending(reason: string) {
+    for (const p of this.pending.values()) {
+      clearTimeout(p.timer);
+      p.reject(new Error(reason));
+    }
+    this.pending.clear();
+    this.outer.clear();
   }
 
   private markClosed(reason: string) {
     if (this.closed) return;
     this.closed = true;
     this.closeReason ??= reason;
-    for (const p of this.pending.values()) {
-      clearTimeout(p.timer);
-      p.reject(new Error(`Session closed: ${reason}`));
-    }
-    this.pending.clear();
+    this.rejectPending(`Session closed: ${reason}`);
+    this.ws.close();
   }
 
   async refreshTarget(): Promise<void> {
@@ -344,18 +372,19 @@ export class WebKitSession implements PageSession {
   }
 
   private async evaluateInGroup(expression: string, objectGroup: string): Promise<{ text: string; isError: boolean }> {
-    let { result, wasThrown } = await this.send("Runtime.evaluate", {
-      expression,
-      objectGroup,
-      generatePreview: true,
-      emulateUserGesture: true,
-    });
+    // withEvalTimeout bounds the whole call, so these commands must not time out sooner.
+    let { result, wasThrown } = await this.send(
+      "Runtime.evaluate",
+      { expression, objectGroup, generatePreview: true, emulateUserGesture: true },
+      EVAL_TIMEOUT_MS + 1_000,
+    );
     // WebKit ignores awaitPromise on evaluate; it has a separate command for it.
     if (!wasThrown && result.type === "object" && result.className === "Promise" && result.objectId) {
-      ({ result, wasThrown } = await this.send("Runtime.awaitPromise", {
-        promiseObjectId: result.objectId,
-        generatePreview: true,
-      }));
+      ({ result, wasThrown } = await this.send(
+        "Runtime.awaitPromise",
+        { promiseObjectId: result.objectId, generatePreview: true },
+        EVAL_TIMEOUT_MS + 1_000,
+      ));
     }
     if (wasThrown) return { text: truncate(formatArg(result), MAX_EVAL_TEXT), isError: true };
     return { text: await this.renderValue(result), isError: false };
@@ -366,23 +395,27 @@ export class WebKitSession implements PageSession {
     if (o.type === "undefined") return "undefined";
     if (o.subtype === "node") return o.description ?? "node";
     if (o.objectId && o.type === "object" && (!o.subtype || o.subtype === "array")) {
-      const { result, wasThrown } = await this.send("Runtime.callFunctionOn", {
-        objectId: o.objectId,
+      const { result, wasThrown } = await this.send(
+        "Runtime.callFunctionOn",
+        {
+          objectId: o.objectId,
         functionDeclaration: `function () {
           const s = JSON.stringify(this, null, 2);
           return typeof s === "string" && s.length > ${MAX_EVAL_TEXT} ? s.slice(0, ${MAX_EVAL_TEXT}) + "… [+" + (s.length - ${MAX_EVAL_TEXT}) + " chars]" : s;
         }`,
-        returnByValue: true,
-      });
+          returnByValue: true,
+        },
+        EVAL_TIMEOUT_MS + 1_000,
+      );
       if (!wasThrown && typeof result.value === "string") return result.value;
     }
     return truncate(formatArg(o), MAX_EVAL_TEXT);
   }
 
   async close(reason = "detached") {
-    if (this.closed) return;
-    this.closeReason = reason;
+    if (!this.closed) this.closeReason = reason;
     this.markClosed(reason);
+    // Also covers sessions already marked closed (page destroyed) whose socket may still be open.
     this.ws.close();
   }
 }

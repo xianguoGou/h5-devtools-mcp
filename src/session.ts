@@ -291,6 +291,7 @@ export class SessionManager {
       this.lastId = target.id;
       return { session: existing, reused: true };
     }
+    await existing?.close();
     const session = target.platform === "ios" ? await WebKitSession.open(target) : await Session.open(target);
     this.sessions.set(target.id, session);
     this.lastId = target.id;

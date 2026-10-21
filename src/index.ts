@@ -183,11 +183,14 @@ server.registerTool(
 );
 
 async function shutdown() {
-  await sessions.closeAll();
+  // A hung CDP close (adb forward already gone) must not keep the server and its proxies alive.
+  await Promise.race([sessions.closeAll(), new Promise((r) => setTimeout(r, 2_000))]);
   process.exit(0);
 }
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+// The stdio transport doesn't exit when the client goes away; open sessions and child proxies would keep us alive.
+process.stdin.on("close", shutdown);
 
 await server.connect(new StdioServerTransport());
 console.error("h5-devtools-mcp running on stdio");
