@@ -55,10 +55,12 @@ server.registerTool(
   {
     title: "Attach to a page",
     description:
-      "Connect to a WebView page and start buffering its console output and uncaught exceptions. " +
-      "Recent messages the engine still holds are replayed on attach, but attach before reproducing an issue to be sure nothing is missed.",
+      "Connect to a WebView page and start buffering its console output and uncaught exceptions (the last 1000 entries). " +
+      "Recent messages the engine still holds are replayed on attach, but attach before reproducing an issue to be sure nothing is missed. " +
+      "Only observes the page: it is not reloaded or modified. May be refused while Chrome DevTools (chrome://inspect) is attached to the same page; close it and retry. " +
+      "Calling it again for an attached page reuses the existing session.",
     inputSchema: {
-      target_id: z.string().describe("Target id from list_targets"),
+      target_id: z.string().describe("Target id from list_targets, e.g. \"<serial>/<socket>/<page id>\""),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
@@ -83,6 +85,7 @@ server.registerTool(
     title: "Read console output",
     description:
       "Read buffered console messages, uncaught exceptions and browser log entries from an attached page. " +
+      "Requires attach first; only entries captured since attach (plus what attach replayed) are available. " +
       "Returns the most recent matching entries. Pass since_seq from a previous call to get only new entries.",
     inputSchema: {
       target_id: z.string().optional().describe("Defaults to the most recently attached page"),
@@ -160,7 +163,9 @@ server.registerTool(
   "detach",
   {
     title: "Detach from a page",
-    description: "Disconnect from a page and discard its buffered events.",
+    description:
+      "Disconnect from a page and discard its buffered console entries. The page itself keeps running and is not closed; " +
+      "call attach again to resume capturing. Use it to stop capturing or to start over with an empty buffer.",
     inputSchema: {
       target_id: z.string().optional().describe("Defaults to the most recently attached page"),
     },
