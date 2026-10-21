@@ -2,37 +2,28 @@ import CDP from "chrome-remote-interface";
 import type { Protocol } from "devtools-protocol";
 import { RingBuffer } from "./ringBuffer.js";
 import { currentPageInfo, type Target } from "./targets.js";
+import {
+  BUFFER_SIZE,
+  MAX_EVAL_TEXT,
+  truncate,
+  withEvalTimeout,
+  type ConsoleEntry,
+  type ConsoleLevel,
+  type PageSession,
+} from "./format.js";
+import { WebKitSession } from "./webkitSession.js";
 
-export const CONSOLE_LEVELS = ["debug", "log", "info", "warn", "error"] as const;
-export type ConsoleLevel = (typeof CONSOLE_LEVELS)[number];
+export { CONSOLE_LEVELS, type ConsoleEntry } from "./format.js";
 
-export interface ConsoleEntry {
-  seq: number;
-  time: number;
-  level: ConsoleLevel;
-  /** console = console.* calls, exception = uncaught errors, browser = engine messages (network errors, violations…) */
-  source: "console" | "exception" | "browser";
-  text: string;
-  location?: string;
-}
-
-const MAX_TEXT = 1000;
-const BUFFER_SIZE = 1000;
 /** Caps the CDP round-trips spent fetching previews on attach; older replayed objects print as "Object". */
 const MAX_REPLAY_PREVIEWS = 200;
 const PREVIEW_GROUP = "h5-devtools-preview";
-const MAX_EVAL_TEXT = 4000;
-const EVAL_TIMEOUT_MS = 10_000;
 const EVAL_GROUP = "h5-devtools-eval";
 
 type PendingEntry = { entry: Omit<ConsoleEntry, "seq">; args?: Protocol.Runtime.RemoteObject[] };
 
 const needsPreview = (o: Protocol.Runtime.RemoteObject) =>
   !o.preview && !!o.objectId && o.type === "object" && o.subtype !== "error";
-
-function truncate(s: string, max = MAX_TEXT): string {
-  return s.length > max ? `${s.slice(0, max)}… [+${s.length - max} chars]` : s;
-}
 
 function formatPreview(p: Protocol.Runtime.ObjectPreview): string {
   // Map/Set contents live in `entries`, not `properties`.
@@ -89,7 +80,8 @@ function normalizeLogLevel(level: string): ConsoleLevel {
   return "info";
 }
 
-export class Session {
+/** Android WebView / Chrome page over Chrome DevTools Protocol. */
+export class Session implements PageSession {
   readonly console = new RingBuffer<ConsoleEntry>(BUFFER_SIZE);
   closed = false;
   closeReason?: string;
@@ -235,17 +227,9 @@ export class Session {
     if (this.closed) throw new Error(`Session closed: ${this.closeReason}. Re-run list_targets and attach.`);
     // One group per call, so a finishing call can't release objects a concurrent call still uses.
     const objectGroup = `${EVAL_GROUP}-${++this.evalCount}`;
-    let timer: NodeJS.Timeout | undefined;
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error(`Evaluation did not finish within ${EVAL_TIMEOUT_MS / 1000}s (it may still be running in the page).`)),
-        EVAL_TIMEOUT_MS,
-      );
-    });
     try {
-      return await Promise.race([this.evaluateInGroup(expression, objectGroup), timeout]);
+      return await withEvalTimeout(this.evaluateInGroup(expression, objectGroup));
     } finally {
-      clearTimeout(timer);
       await this.client.Runtime.releaseObjectGroup({ objectGroup }).catch(() => {});
     }
   }
@@ -298,23 +282,23 @@ export class Session {
 }
 
 export class SessionManager {
-  private sessions = new Map<string, Session>();
+  private sessions = new Map<string, PageSession>();
   private lastId?: string;
 
-  async attach(target: Target): Promise<{ session: Session; reused: boolean }> {
+  async attach(target: Target): Promise<{ session: PageSession; reused: boolean }> {
     const existing = this.sessions.get(target.id);
     if (existing && !existing.closed) {
       this.lastId = target.id;
       return { session: existing, reused: true };
     }
-    const session = await Session.open(target);
+    const session = target.platform === "ios" ? await WebKitSession.open(target) : await Session.open(target);
     this.sessions.set(target.id, session);
     this.lastId = target.id;
     return { session, reused: false };
   }
 
   /** Get a session by id, or the most recently attached one. */
-  get(id?: string): Session {
+  get(id?: string): PageSession {
     const key = id ?? this.lastId;
     if (!key) throw new Error("No page attached. Call list_targets, then attach.");
     const session = this.sessions.get(key);
@@ -322,7 +306,7 @@ export class SessionManager {
     return session;
   }
 
-  async detach(id?: string): Promise<Session> {
+  async detach(id?: string): Promise<PageSession> {
     const session = this.get(id);
     await session.close();
     this.sessions.delete(session.target.id);
