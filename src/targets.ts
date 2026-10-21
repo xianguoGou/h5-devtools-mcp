@@ -1,8 +1,11 @@
 import { findDevtoolsSockets, forwardSocket, getProcessName, listDevices } from "./adb.js";
+import { listIosTargets } from "./ios.js";
 
 export interface Target {
-  /** Stable id passed to other tools: `<serial>/<socket>/<pageId>`. */
+  /** Stable id passed to other tools: `<serial>/<socket>/<pageId>` (Android) or `ios/<deviceId>/<pageId>`. */
   id: string;
+  /** android = Chromium WebView over adb + CDP; ios = WKWebView over ios_webkit_debug_proxy + WebKit protocol. */
+  platform: "android" | "ios";
   serial: string;
   model?: string;
   socket: string;
@@ -19,7 +22,7 @@ export interface Target {
   wsUrl: string;
 }
 
-interface JsonPage {
+export interface JsonPage {
   id: string;
   type: string;
   title: string;
@@ -32,12 +35,19 @@ const cache = new Map<string, Target>();
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-async function fetchPages(port: number): Promise<JsonPage[]> {
+export async function fetchPages(port: number): Promise<JsonPage[]> {
   const res = await fetch(`http://127.0.0.1:${port}/json/list`, {
     signal: AbortSignal.timeout(3000),
   });
   if (!res.ok) throw new Error(`/json/list returned HTTP ${res.status}`);
-  return (await res.json()) as JsonPage[];
+  // ios_webkit_debug_proxy omits id/type; its page id is the last segment of the debugger URL.
+  return ((await res.json()) as Partial<JsonPage>[]).map((p) => ({
+    ...p,
+    id: p.id ?? p.webSocketDebuggerUrl?.split("/").pop() ?? "",
+    type: p.type ?? "page",
+    title: p.title ?? "",
+    url: p.url ?? "",
+  }));
 }
 
 /** Current title/url of a page on an already-forwarded port; undefined when it can't be read. */
@@ -61,6 +71,27 @@ export async function listTargets(): Promise<{ targets: Target[]; warnings: stri
   const targets: Target[] = [];
   const warnings: string[] = [];
 
+  let androidError: unknown;
+  const [, ios] = await Promise.all([
+    listAndroidTargets(targets, warnings).catch((e) => {
+      androidError = e;
+    }),
+    listIosTargets(),
+  ]);
+  targets.push(...ios.targets);
+  warnings.push(...ios.warnings);
+  // Without adb, only fail when there is nothing else to show.
+  if (androidError) {
+    if (ios.targets.length === 0) throw androidError;
+    warnings.push(errMsg(androidError));
+  }
+
+  cache.clear();
+  for (const t of targets) cache.set(t.id, t);
+  return { targets, warnings };
+}
+
+async function listAndroidTargets(targets: Target[], warnings: string[]): Promise<void> {
   const devices = await listDevices();
   if (devices.length === 0) {
     warnings.push("No Android devices found. Connect a device with USB debugging enabled and check `adb devices`.");
@@ -104,6 +135,7 @@ export async function listTargets(): Promise<{ targets: Target[]; warnings: stri
           }
           targets.push({
             id: `${device.serial}/${socket.name}/${page.id}`,
+            platform: "android",
             serial: device.serial,
             model: device.model,
             socket: socket.name,
@@ -125,10 +157,6 @@ export async function listTargets(): Promise<{ targets: Target[]; warnings: stri
       }
     }
   }
-
-  cache.clear();
-  for (const t of targets) cache.set(t.id, t);
-  return { targets, warnings };
 }
 
 /**

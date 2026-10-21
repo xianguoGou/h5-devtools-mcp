@@ -1,17 +1,17 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.xianguoGou/h5-devtools-mcp",
-  "description": "Debug H5 pages inside Android app WebViews: console logs, exceptions, run JS.",
+  "description": "Debug H5 pages inside Android WebViews and iOS WKWebViews: console logs, exceptions, run JS.",
   "repository": {
     "url": "https://github.com/xianguoGou/h5-devtools-mcp",
     "source": "github"
   },
-  "version": "0.1.3",
+  "version": "0.2.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "h5-devtools-mcp",
-      "version": "0.1.3",
+      "version": "0.2.0",
       "transport": {
         "type": "stdio"
       }

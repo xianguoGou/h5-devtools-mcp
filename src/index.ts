@@ -35,7 +35,7 @@ server.registerTool(
   {
     title: "List WebView pages",
     description:
-      "List debuggable H5 pages running inside Android WebViews (and Chrome) on connected devices. " +
+      "List debuggable H5 pages running inside Android WebViews (and Chrome) and iOS WKWebViews (and Safari) on connected devices and the booted iOS Simulator. " +
       "Returns a target id for each page to pass to attach.",
     inputSchema: {},
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -56,7 +56,7 @@ server.registerTool(
     title: "Attach to a page",
     description:
       "Connect to a WebView page and start buffering its console output and uncaught exceptions (the last 1000 entries). " +
-      "Recent messages the engine still holds are replayed on attach, but attach before reproducing an issue to be sure nothing is missed. " +
+      "On Android, recent messages the engine still holds are replayed on attach; on iOS only messages logged after the first attach exist, so attach before reproducing an issue. " +
       "Only observes the page: it is not reloaded or modified. May be refused while Chrome DevTools (chrome://inspect) is attached to the same page; close it and retry. " +
       "Calling it again for an attached page reuses the existing session.",
     inputSchema: {
@@ -183,11 +183,14 @@ server.registerTool(
 );
 
 async function shutdown() {
-  await sessions.closeAll();
+  // A hung CDP close (adb forward already gone) must not keep the server and its proxies alive.
+  await Promise.race([sessions.closeAll(), new Promise((r) => setTimeout(r, 2_000))]);
   process.exit(0);
 }
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+// The stdio transport doesn't exit when the client goes away; open sessions and child proxies would keep us alive.
+process.stdin.on("close", shutdown);
 
 await server.connect(new StdioServerTransport());
 console.error("h5-devtools-mcp running on stdio");

@@ -31,7 +31,8 @@ for (let i = 0; ; i++) {
 const transport = new StdioClientTransport({
   command: "node",
   args: [path.join(root, "dist/index.js")],
-  env: { ...process.env, ADB_PATH: path.join(dir, "fake-adb.sh"), FAKE_PORT: PORT },
+  // IWDP_PATH points nowhere so a locally installed ios_webkit_debug_proxy cannot add iOS pages.
+  env: { ...process.env, ADB_PATH: path.join(dir, "fake-adb.sh"), FAKE_PORT: PORT, IWDP_PATH: "/nonexistent/ios_webkit_debug_proxy" },
 });
 const client = new Client({ name: "e2e", version: "0" });
 await client.connect(transport);
@@ -43,6 +44,7 @@ const call = async (name, args = {}) => {
 
 try {
   const list = await call("list_targets");
+  if (/iOS|ios\//.test(list)) throw new Error("list_targets mentions iOS although iwdp is not installed");
   const id = list.match(/- id: (\S+)/)?.[1];
   if (!id) throw new Error("no target found");
   await call("attach", { target_id: id });
