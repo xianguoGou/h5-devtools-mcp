@@ -1,7 +1,7 @@
 import CDP from "chrome-remote-interface";
 import type { Protocol } from "devtools-protocol";
 import { RingBuffer } from "./ringBuffer.js";
-import type { Target } from "./targets.js";
+import { currentPageInfo, type Target } from "./targets.js";
 
 export const CONSOLE_LEVELS = ["debug", "log", "info", "warn", "error"] as const;
 export type ConsoleLevel = (typeof CONSOLE_LEVELS)[number];
@@ -95,9 +95,16 @@ export class Session {
   closeReason?: string;
 
   private constructor(
-    readonly target: Target,
+    public target: Target,
     private readonly client: CDP.Client,
   ) {}
+
+  /** The page may have navigated or retitled since attach; keep the old values if the lookup fails. */
+  async refreshTarget(): Promise<void> {
+    if (this.closed) return;
+    const info = await currentPageInfo(this.target);
+    if (info) this.target = { ...this.target, ...info };
+  }
 
   static async open(target: Target): Promise<Session> {
     if (target.debuggerInUse) {

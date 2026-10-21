@@ -40,6 +40,16 @@ async function fetchPages(port: number): Promise<JsonPage[]> {
   return (await res.json()) as JsonPage[];
 }
 
+/** Current title/url of a page on an already-forwarded port; undefined when it can't be read. */
+export async function currentPageInfo(t: Target): Promise<Pick<Target, "title" | "url"> | undefined> {
+  try {
+    const page = (await fetchPages(t.port)).find((p) => p.id === t.pageId);
+    return page && { title: page.title, url: page.url };
+  } catch {
+    return undefined;
+  }
+}
+
 function appNameFromSocket(socket: string): string | undefined {
   if (socket === "chrome_devtools_remote") return "Chrome browser";
   // Some vendors/apps use "<package>_devtools_remote".
