@@ -57,7 +57,7 @@ server.registerTool(
     description:
       "Connect to a WebView page and start buffering its console output and uncaught exceptions (the last 1000 entries). " +
       "Recent messages the engine still holds are replayed on attach, but attach before reproducing an issue to be sure nothing is missed. " +
-      "Only observes the page: it is not reloaded or modified. Fails if Chrome DevTools (chrome://inspect) is already attached to the page. " +
+      "Only observes the page: it is not reloaded or modified. May be refused while Chrome DevTools (chrome://inspect) is attached to the same page; close it and retry. " +
       "Calling it again for an attached page reuses the existing session.",
     inputSchema: {
       target_id: z.string().describe("Target id from list_targets, e.g. \"<serial>/<socket>/<page id>\""),
