@@ -3,6 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/h5-devtools-mcp.svg)](https://www.npmjs.com/package/h5-devtools-mcp)
 [![npm downloads](https://img.shields.io/npm/dm/h5-devtools-mcp.svg)](https://www.npmjs.com/package/h5-devtools-mcp)
 [![license](https://img.shields.io/npm/l/h5-devtools-mcp.svg)](LICENSE)
+[![xianguoGou/h5-devtools-mcp MCP server](https://glama.ai/mcp/servers/xianguoGou/h5-devtools-mcp/badges/score.svg)](https://glama.ai/mcp/servers/xianguoGou/h5-devtools-mcp)
 
 [English](README.md) | 简体中文
 
