@@ -61,6 +61,11 @@ try {
   await call("evaluate_js", { expression: "missingVar.x" });
   await call("evaluate_js", { expression: "Promise.reject(\"rejected string\")" });
   await call("evaluate_js", { expression: "Array(5000).fill(1)" });
+  await call("evaluate_js", { expression: "document.title = 'Renamed Order'; history.pushState(null, '', '#paid'); 1" });
+  const header = await call("get_console", { limit: 1 });
+  if (!header.startsWith('Page: "Renamed Order"') || !header.includes("#paid)")) {
+    throw new Error("get_console header did not pick up the new title/url");
+  }
   await call("detach");
 } finally {
   await client.close();

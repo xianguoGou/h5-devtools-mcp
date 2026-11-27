@@ -103,6 +103,7 @@ server.registerTool(
   async ({ target_id, levels, keyword, exclude_keywords, since_seq, limit = 50 }) => {
     try {
       const session = sessions.get(target_id);
+      await session.refreshTarget();
       const kw = keyword?.toLowerCase();
       const excludes = exclude_keywords?.map((k) => k.toLowerCase()) ?? [];
       const all = session.console.all();
